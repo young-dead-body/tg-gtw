@@ -1,6 +1,6 @@
-# Telegram Gateway
+# Service Gateway
 
-Шлюз с веб-панелью, защищённым доступом к Telegram Web и необязательным ботом.
+Шлюз с веб-панелью, защищённым доступом.
 Стандартное развёртывание выполняется **на том VPS, где работают контейнеры**.
 Нужны только [docker-compose.yml](docker-compose.yml), [.env.example](.env.example)
 и [scripts/install.sh](scripts/install.sh). Полная инструкция:
