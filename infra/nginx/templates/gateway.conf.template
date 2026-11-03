@@ -1,0 +1,187 @@
+# HTTP → HTTPS redirect (TLS enforced; no content over plain HTTP).
+server {
+    listen 80;
+    listen [::]:80;
+    server_name _;
+
+    return 301 https://$host$request_uri;
+}
+
+# HTTPS entrypoint: TLS 1.3, HSTS, CSP and security headers.
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+
+    server_name _;
+
+    ssl_certificate     ${TLS_CERT};
+    ssl_certificate_key ${TLS_KEY};
+    ssl_protocols       TLSv1.3;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_stapling        on;
+    ssl_stapling_verify on;
+
+    # TLS 1.3 security headers.
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';" always;
+
+    # SPA static assets (web). Vite's dev-mode inline scripts/CSS are served
+    # by the dev server on its own port, not through this production block.
+    # Upstreams go through variables + the Docker DNS resolver so nginx
+    # re-resolves them: a statically resolved IP is cached for nginx's
+    # lifetime, and after a host reboot the stale IP can be handed to another
+    # container (prod incident: /api/ hit telegram-proxy → 401 everywhere).
+    location / {
+        resolver 127.0.0.11 valid=10s ipv6=off;
+        set $web_upstream ${WEB_UPSTREAM};
+        proxy_pass http://$web_upstream;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # Backend gateway API. The rewrite strips the /api/ prefix (a variable
+    # proxy_pass cannot do it by itself), so the API sees /health, /login, etc.
+    location /api/ {
+        resolver 127.0.0.11 valid=10s ipv6=off;
+        set $api_upstream ${API_UPSTREAM};
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_pass http://$api_upstream;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # Telegram Web reverse proxy (S10). Upstream is deferred via a variable so
+    # nginx starts even before the proxy service exists; requests 502 until it
+    # is up, and WebSocket upgrades are forwarded. The Docker DNS resolver
+    # refreshes the upstream IP, so the proxy stays reachable after container
+    # recreates (nginx would otherwise cache the first resolved IP forever).
+    location /tg/ {
+        resolver 127.0.0.11 valid=10s ipv6=off;
+        set $tg_upstream ${TG_UPSTREAM};
+        proxy_pass http://$tg_upstream;
+
+        # Telegram serves the worker bundle and MTProto config responses with
+        # Content-Encoding when the client advertises it, and the proxy cannot
+        # rewrite compressed bodies (bundle bootstrap URLs, dc_options). Force
+        # identity encoding upstream; nginx still compresses client-side.
+        proxy_set_header Accept-Encoding "";
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+
+        # Telegram Web launches cross-origin connections to its DC transport
+        # hosts (https://*.web.telegram.org — MTProto over HTTPS). DNS sends
+        # those hosts to the gateway (port 443 → TLS-passthrough in
+        # telegram-proxy → SOCKS5 → real Telegram), so CSP must allow them.
+        # worker-src 'self' blob: lets the app spawn its crypto/SharedWorkers
+        # from blob URLs (see service worker 401s below). connect-src lists
+        # the gateway's DC bridge (192.0.2.10:20001..20005), a different
+        # origin than :8444, where the browser's MTProto WebSockets land after
+        # dc_options rewriting.
+        # Telegram's own bundle needs more than a bare script-src 'self':
+        # libsodium compiles WebAssembly ('wasm-unsafe-eval'; 'unsafe-eval'
+        # covers browsers that do not know the newer keyword), the voice/call
+        # recorder loads its AudioWorklet module from a blob: URL (script-src
+        # blob:, otherwise recording fails with AbortError), and all media
+        # (avatars, photos, videos, GIFs, stickers) is rendered from blob:
+        # URLs created after download, so img-src/media-src/connect-src must
+        # include blob: and media-src must be set explicitly.
+        # A location-level add_header replaces the whole server-level set, so
+        # the security headers are re-declared here. Permissions-Policy opens
+        # microphone/camera/display-capture for 'self' only: Telegram Web calls
+        # (getUserMedia) are blocked outright by microphone=() before the
+        # browser even asks the user; the admin SPA keeps the strict policy.
+        add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Permissions-Policy "camera=(self), microphone=(self), display-capture=(self), geolocation=()" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' blob: 'wasm-unsafe-eval' 'unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self' data: blob: wss://$http_host; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';" always;
+
+        # Static hashed assets (immutable URLs) are cached locally so transient
+        # upstream failures (502/ERR_HTTP2 via the SOCKS5 egress) never break
+        # the UI: stale copies are served while the backend is flaky.
+        location ~ ^/tg/(assets|fonts)/ {
+            proxy_cache off;
+            proxy_cache_valid 200 206 7d;
+            proxy_cache_use_stale error timeout http_500 http_502 http_503 http_504;
+            proxy_cache_key "secure-dc-v1:$uri";
+
+            resolver 127.0.0.11 valid=10s ipv6=off;
+            set $tg_upstream ${TG_UPSTREAM};
+            proxy_pass http://$tg_upstream;
+
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+
+            add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+            add_header X-Content-Type-Options "nosniff" always;
+            add_header X-Frame-Options "DENY" always;
+            add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+            add_header Permissions-Policy "camera=(self), microphone=(self), display-capture=(self), geolocation=()" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' blob: 'wasm-unsafe-eval' 'unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self' data: blob: wss://$http_host; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';" always;
+        }
+
+        # Service worker script and web manifests: hashed versioned static
+        # files the browser fetches without session credentials. Cached like
+        # assets so registration/install keep working while the backend flaps,
+        # but the upstream Cache-Control (max-age=3600) must not poison the
+        # browser with a truncated/broken 200 from a flaky egress: SW scripts
+        # are revalidated every time instead.
+        location ~ ^/tg/(sw-[A-Za-z0-9_.-]+\.js|[A-Za-z0-9_.-]+\.webmanifest)$ {
+            proxy_cache off;
+            proxy_cache_valid 200 206 7d;
+            proxy_cache_use_stale error timeout http_500 http_502 http_503 http_504;
+            proxy_cache_key "secure-dc-v1:$request_uri";
+
+            proxy_cache_revalidate on;
+            proxy_hide_header Cache-Control;
+            add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+
+            resolver 127.0.0.11 valid=10s ipv6=off;
+            set $tg_upstream ${TG_UPSTREAM};
+            proxy_pass http://$tg_upstream;
+
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+
+            add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+            add_header X-Content-Type-Options "nosniff" always;
+            add_header X-Frame-Options "DENY" always;
+            add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+            add_header Permissions-Policy "camera=(self), microphone=(self), display-capture=(self), geolocation=()" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' blob: 'wasm-unsafe-eval' 'unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self' data: blob: wss://$http_host; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';" always;
+        }
+    }
+}

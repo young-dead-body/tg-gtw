@@ -1,0 +1,150 @@
+# VPS-профиль прод-стека (docs/deploy/VPS.md): 1 vCPU / 1 ГБ ОЗУ.
+# Накладывается поверх docker-compose.yml (COMPOSE_FILE в .env на VPS):
+#   - мониторинг (prometheus/grafana/loki/promtail) уходит в профиль
+#     "monitoring" и по умолчанию не запускается (~210 МБ ОЗУ);
+#   - лимиты памяти + GOMEMLIMIT для Go-сервисов, тюнинг Postgres/Redis;
+#   - наружу ничего не публикуется: Docker-порты обходят ufw, поэтому всё
+#     привязано к 127.0.0.1 и доступно только системному nginx VPS;
+#   - выход в Telegram (если с VPS он недоступен) — контейнер xray
+#     (профиль "xray", VLESS+REALITY на ваш зарубежный сервер).
+#
+# Порты на loopback VPS (их же указывает infra/vps/nginx/targets/vps.*.conf):
+#   127.0.0.1:16443        nginx шлюза :443 (веб-вход, внутренний TLS-хоп)
+#   127.0.0.1:21001-21005  DC-мост (plaintext, TLS терминирует nginx VPS)
+#   127.0.0.1:13478        TURN/TCP telegram-proxy
+#   127.0.0.1:18090        api :8080 (health-check деплоя)
+#   127.0.0.1:10808        SOCKS5 xray (диагностика выхода)
+# Они не пересекаются с портами frps (docs/deploy/HOME.md), поэтому стек на
+# VPS и домашний стек за frp могут работать одновременно.
+
+# Образы VPS-стека называются telegram-gateway-vps-*: на машине деплоя может
+# работать свой (домашний) стек с образами telegram-gateway-prod-*, и сборка
+# для VPS не должна их перезаписывать.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    command:
+      - postgres
+      - -c
+      - shared_buffers=32MB
+      - -c
+      - effective_cache_size=192MB
+      - -c
+      - work_mem=2MB
+      - -c
+      - maintenance_work_mem=32MB
+      - -c
+      - max_connections=40
+      - -c
+      - wal_buffers=4MB
+    ports: !reset []
+    mem_limit: 192m
+    logging: *logging
+
+  redis:
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "48mb", "--maxmemory-policy", "noeviction"]
+    ports: !reset []
+    mem_limit: 64m
+    logging: *logging
+
+  migrate:
+    image: telegram-gateway-vps-migrate:latest
+    mem_limit: 96m
+    logging: *logging
+
+  api:
+    image: telegram-gateway-vps-api:latest
+    environment:
+      GOMEMLIMIT: 80MiB
+      # Без promtail файловый лог некому читать и ротировать: только stdout
+      # (json-file с ротацией ниже).
+      LOG_FILE: ""
+    ports: !override
+      - "127.0.0.1:18090:8080"
+    mem_limit: 128m
+    logging: *logging
+
+  bot:
+    image: telegram-gateway-vps-bot:latest
+    environment:
+      GOMEMLIMIT: 40MiB
+      # Bot API через прокси, если api.telegram.org с VPS недоступен
+      # (socks5://xray:10808); пусто — напрямую.
+      HTTPS_PROXY: ${BOT_HTTPS_PROXY:-}
+      NO_PROXY: api,localhost,127.0.0.1
+    mem_limit: 64m
+    logging: *logging
+
+  web:
+    image: telegram-gateway-vps-web:latest
+    ports: !reset []
+    mem_limit: 32m
+    logging: *logging
+
+  telegram-proxy:
+    image: telegram-gateway-vps-telegram-proxy:latest
+    environment:
+      GOMEMLIMIT: 150MiB
+    ports: !override
+      - "127.0.0.1:13478:3478"
+    mem_limit: 192m
+    logging: *logging
+
+  nginx:
+    ports: !override
+      - "127.0.0.1:16443:443"
+    mem_limit: 64m
+    logging: *logging
+
+  # SOCKS5 -> VLESS (XHTTP/TCP/WS/gRPC, REALITY/TLS) на ваш зарубежный
+  # сервер (COMPOSE_PROFILES=xray, SOCKS5_ADDR=xray:10808). Конфиг собирает
+  # scripts/vps/xray-config.py из ссылок XRAY_LINK_1..N в .env.vps; при
+  # нескольких ссылках — балансировщик с проверкой узлов. Статический IP
+  # нужен для UDP ASSOCIATE (TURN-релей): xray сообщает клиенту адрес
+  # UDP-релея из settings.ip.
+  xray:
+    image: teddysun/xray:26.3.27
+    profiles: ["xray"]
+    restart: unless-stopped
+    volumes:
+      - ./infra/xray/config.json:/etc/xray/config.json:ro
+    ports:
+      - "127.0.0.1:10808:10808"
+    networks:
+      default:
+        ipv4_address: 172.31.250.53
+    mem_limit: 64m
+    logging: *logging
+
+  # Включаются COMPOSE_PROFILES=monitoring; порты только на loopback
+  # (Grafana: ssh -L 3001:127.0.0.1:3001 root@<vps>).
+  prometheus:
+    profiles: ["monitoring"]
+    ports: !override
+      - "127.0.0.1:9090:9090"
+    logging: *logging
+  grafana:
+    profiles: ["monitoring"]
+    ports: !override
+      - "127.0.0.1:3001:3000"
+    logging: *logging
+  loki:
+    profiles: ["monitoring"]
+    ports: !override
+      - "127.0.0.1:3100:3100"
+    logging: *logging
+  promtail:
+    profiles: ["monitoring"]
+    logging: *logging
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.31.250.0/24

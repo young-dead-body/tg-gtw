@@ -1,0 +1,35 @@
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+
+common:
+  path_prefix: /loki
+  storage_config:
+    filesystem:
+      directory: /loki/chunks
+  compactor_address: http://loki:3100
+
+schema_config:
+  configs:
+    - from: 2020-10-24
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: loki_index_
+        period: 24h
+
+ingester:
+  chunk_idle_period: 1h
+  chunk_target_size: 1048576
+
+storage_config:
+  filesystem:
+    directory: /loki/chunks
+
+limits_config:
+  retention_period: 336h
+
+compactor:
+  working_directory: /tmp/compactor

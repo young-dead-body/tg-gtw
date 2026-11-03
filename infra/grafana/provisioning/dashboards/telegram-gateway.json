@@ -1,0 +1,93 @@
+{
+  "uid": "telegram-gateway",
+  "title": "Telegram Gateway",
+  "tags": ["gateway"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "HTTP Requests / s",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (route) (rate(telegram_gateway_http_requests_total[1m]))",
+          "legendFormat": "{{route}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 2,
+      "title": "HTTP Latency p95 (s)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(telegram_gateway_http_request_duration_seconds_bucket[1m])))",
+          "legendFormat": "p95"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 3,
+      "title": "Dependencies Up",
+      "type": "stat",
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "telegram_gateway_dependencies_postgres_up", "legendFormat": "PostgreSQL" },
+        { "expr": "telegram_gateway_dependencies_redis_up", "legendFormat": "Redis" },
+        { "expr": "telegram_gateway_dependencies_telegram_proxy_up", "legendFormat": "Telegram proxy" }
+      ],
+      "fieldConfig": { "defaults": { "max": 1, "min": 0, "thresholds": { "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] } } }
+    },
+    {
+      "id": 4,
+      "title": "Proxy requests / s",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (method) (rate(telegram_gateway_proxy_requests_total[1m]))",
+          "legendFormat": "{{method}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 5,
+      "title": "Proxy backends",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "telegram_gateway_proxy_backend_active", "legendFormat": "{{url}}" }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "displayMode": "color-background" } } }
+    },
+    {
+      "id": 6,
+      "title": "Error rate (5xx)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(telegram_gateway_http_requests_total{status=~\"5..\"}[1m])) / sum(rate(telegram_gateway_http_requests_total[1m]))",
+          "legendFormat": "5xx rate"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit" } }
+    }
+  ],
+  "templating": { "list": [] }
+}

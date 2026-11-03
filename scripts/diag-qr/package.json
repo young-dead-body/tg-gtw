@@ -1,0 +1,16 @@
+{
+  "name": "diag-qr",
+  "version": "1.0.0",
+  "description": "Playwright-based diagnostic for the Telegram Web QR login (DC bridge connectivity, bundle/config rewrite, CSP).",
+  "type": "module",
+  "main": "diag-qr.mjs",
+  "bin": {
+    "diag-qr": "diag-qr.mjs"
+  },
+  "scripts": {
+    "do": "node diag-qr.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.49.1"
+  }
+}

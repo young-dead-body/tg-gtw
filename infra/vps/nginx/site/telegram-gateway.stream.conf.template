@@ -1,0 +1,27 @@
+# Системный nginx VPS: SNI-маршрутизатор :443 для ${DOMAIN}
+# (scripts/vps/setup-nginx.sh -> /etc/nginx/streams-enabled/telegram-gateway.conf).
+# turn.${DOMAIN} -> TURN-релей (TLS здесь, дальше plain TURN/TCP), всё
+# остальное -> http-сервер 127.0.0.1:4443 (веб-вход и DC-мост).
+# Upstream tgk_turn задаёт переключатель streams-enabled/zz-webtgk-target.conf.
+
+map $ssl_preread_server_name $tls443_upstream {
+    turn.${DOMAIN} 127.0.0.1:5349;
+    default 127.0.0.1:4443;
+}
+
+server {
+    listen 443;
+    ssl_preread on;
+    proxy_pass $tls443_upstream;
+    proxy_protocol on;
+    proxy_connect_timeout 10s;
+}
+
+server {
+    listen 127.0.0.1:5349 ssl proxy_protocol;
+    ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    proxy_pass tgk_turn;
+    proxy_timeout 1h;
+}

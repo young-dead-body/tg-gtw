@@ -1,0 +1,1 @@
+CREATE INDEX idx_users_telegram ON users (lower(telegram)) WHERE telegram IS NOT NULL;

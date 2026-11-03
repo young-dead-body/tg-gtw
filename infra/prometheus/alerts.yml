@@ -1,0 +1,43 @@
+groups:
+  - name: telegram-gateway
+    rules:
+      - alert: GatewayDependencyUnavailable
+        expr: telegram_gateway_dependencies_postgres_up == 0 or telegram_gateway_dependencies_redis_up == 0 or telegram_gateway_dependencies_telegram_proxy_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Gateway dependency unavailable"
+      - alert: TelegramBundleRewriteMiss
+        expr: increase(telegram_gateway_proxy_rewrite_total{kind="bundle",result="miss"}[10m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Telegram bundle changed; verify QR login"
+      - alert: TelegramDCFailures
+        expr: increase(telegram_gateway_proxy_dc_failures_total[5m]) > 5
+        labels:
+          severity: warning
+        annotations:
+          summary: "Telegram DC WebSocket connections are failing"
+      - alert: GatewayBackupStale
+        expr: (time() - telegram_gateway_backup_last_success_timestamp_seconds > 93600) and on(job, instance) ((telegram_gateway_backup_last_success_timestamp_seconds > 0) or (time() - process_start_time_seconds > 93600))
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No successful database backup in the last 26 hours"
+      - alert: GatewayBackupFailed
+        expr: (telegram_gateway_backup_last_run_success == 0) and (telegram_gateway_backup_last_run_timestamp_seconds > 0)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Database backup has not completed successfully"
+      - alert: GatewayScrapeUnavailable
+        expr: up{job=~"api|telegram-proxy"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Gateway monitoring target is unavailable"

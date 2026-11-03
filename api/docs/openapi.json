@@ -1,0 +1,1400 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Защищённый шлюз доступа к Telegram Web",
+    "version": "1.0.0",
+    "description": "Корпоративный веб-шлюз: доступ к Telegram Web после авторизации и принятия согласий. Контракт frontend ↔ backend. Все state-changing эндпоинты требуют CSRF-токен (Cookie `tg_csrf` + заголовок `X-CSRF-Token`)."
+  },
+  "servers": [
+    {
+      "url": "/api",
+      "description": "Через nginx /api префикс"
+    },
+    {
+      "url": "http://localhost:8080",
+      "description": "Локальная разработка"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Проверка готовности API и зависимостей",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Все зависимости доступны",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Хотя бы одна зависимость недоступна"
+          }
+        }
+      }
+    },
+    "/login": {
+      "post": {
+        "summary": "Вход по email и паролю",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Успешный вход; сессионная cookie set-cookie",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Неверные учётные данные",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CSRF или блокировка (brute force)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Слишком много попыток",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/logout": {
+      "post": {
+        "summary": "Завершение текущей сессии",
+        "responses": {
+          "204": {
+            "description": "Сессия завершена"
+          }
+        }
+      }
+    },
+    "/me": {
+      "get": {
+        "summary": "Текущий пользователь",
+        "responses": {
+          "200": {
+            "description": "Профиль",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Нет сессии"
+          }
+        }
+      }
+    },
+    "/me/password": {
+      "post": {
+        "summary": "Сменить пароль и завершить прежние сессии",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordChangeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Пароль сменён"
+          },
+          "400": {
+            "description": "Невалидный пароль / повторное использование"
+          }
+        }
+      }
+    },
+    "/registration": {
+      "post": {
+        "summary": "Заявка на регистрацию",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistrationPayload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Заявка создана",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrationRequest"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ошибка валидации"
+          },
+          "409": {
+            "description": "Email уже используется"
+          },
+          "429": {
+            "description": "Превышен лимит"
+          }
+        }
+      }
+    },
+    "/consent": {
+      "get": {
+        "summary": "Актуальная версия документа согласия",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Версия документа",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsentInfo"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Принять согласие",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Согласие принято"
+          },
+          "409": {
+            "description": "Версия согласия изменилась; требуется перечитать документ"
+          }
+        }
+      }
+    },
+    "/users": {
+      "get": {
+        "summary": "Список пользователей (admin)",
+        "responses": {
+          "200": {
+            "description": "Список",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/User"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Только для admin"
+          }
+        }
+      },
+      "post": {
+        "summary": "Создать пользователя (admin)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUserRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Создан",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/users/{id}": {
+      "patch": {
+        "summary": "Обновить пользователя (admin)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateUserRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Обновлён",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Удалить пользователя (admin)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Удалён"
+          }
+        }
+      }
+    },
+    "/stats": {
+      "get": {
+        "summary": "Статистика входов (admin)",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Статистика",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Statistic"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/logs": {
+      "get": {
+        "summary": "Аудит-лог (admin)",
+        "parameters": [
+          {
+            "name": "actor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Записи",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuditLog"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dashboard": {
+      "get": {
+        "summary": "Метрики дашборда (admin)",
+        "responses": {
+          "200": {
+            "description": "Агрегированные метрики",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Dashboard"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/registration-requests": {
+      "get": {
+        "summary": "Список заявок (admin)",
+        "responses": {
+          "200": {
+            "description": "Заявки",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RegistrationRequest"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/registration-requests/{id}": {
+      "patch": {
+        "summary": "Ревью заявки (admin)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "approved",
+                      "rejected"
+                    ]
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Обновлена"
+          }
+        }
+      }
+    },
+    "/settings/{key}": {
+      "get": {
+        "summary": "Получить настройку (admin)",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Настройка"
+          }
+        }
+      },
+      "put": {
+        "summary": "Обновить настройку (admin)",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Обновлено"
+          }
+        }
+      }
+    },
+    "/bot/credentials": {
+      "post": {
+        "summary": "Одноразовая ссылка установки пароля для привязанного Telegram ID",
+        "responses": {
+          "200": {
+            "description": "Успешно",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Credentials"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Невалидный запрос"
+          },
+          "401": {
+            "description": "Требуется авторизация"
+          },
+          "403": {
+            "description": "Доступ запрещён"
+          },
+          "503": {
+            "description": "Сервис временно недоступен"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "telegram_user_id": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "telegram_user_id"
+                ]
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/bot/users/{id}": {
+      "get": {
+        "summary": "Информация о пользователе (внутренний, bot)",
+        "security": [],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Пользователь"
+          }
+        }
+      }
+    },
+    "/bot/link": {
+      "post": {
+        "summary": "Привязать постоянный Telegram ID одноразовым кодом",
+        "responses": {
+          "200": {
+            "description": "Успешно"
+          },
+          "400": {
+            "description": "Невалидный запрос"
+          },
+          "401": {
+            "description": "Требуется авторизация"
+          },
+          "403": {
+            "description": "Доступ запрещён"
+          },
+          "503": {
+            "description": "Сервис временно недоступен"
+          },
+          "409": {
+            "description": "Код недействителен, истёк или привязка конфликтует"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "telegram_user_id": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "code",
+                  "telegram_user_id"
+                ]
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/password/reset": {
+      "post": {
+        "summary": "Установить пароль одноразовой ссылкой и отозвать прежние сессии",
+        "responses": {
+          "200": {
+            "description": "Успешно"
+          },
+          "400": {
+            "description": "Невалидный запрос"
+          },
+          "401": {
+            "description": "Требуется авторизация"
+          },
+          "403": {
+            "description": "Доступ запрещён"
+          },
+          "503": {
+            "description": "Сервис временно недоступен"
+          },
+          "409": {
+            "description": "Пароль использовался ранее"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 1024
+                  }
+                },
+                "required": [
+                  "token",
+                  "password"
+                ]
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/me/sessions": {
+      "get": {
+        "summary": "Список сессий; id — безопасный идентификатор управления, не cookie-токен",
+        "responses": {
+          "200": {
+            "description": "Успешно",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sessions": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Session"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Невалидный запрос"
+          },
+          "401": {
+            "description": "Требуется авторизация"
+          },
+          "403": {
+            "description": "Доступ запрещён"
+          },
+          "503": {
+            "description": "Сервис временно недоступен"
+          }
+        }
+      }
+    },
+    "/me/sessions/{id}": {
+      "delete": {
+        "summary": "Завершить собственную сессию",
+        "responses": {
+          "200": {
+            "description": "Успешно"
+          },
+          "400": {
+            "description": "Невалидный запрос"
+          },
+          "401": {
+            "description": "Требуется авторизация"
+          },
+          "403": {
+            "description": "Доступ запрещён"
+          },
+          "503": {
+            "description": "Сервис временно недоступен"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/me/sessions/revoke": {
+      "post": {
+        "summary": "Завершить все собственные сессии",
+        "responses": {
+          "200": {
+            "description": "Успешно"
+          },
+          "400": {
+            "description": "Невалидный запрос"
+          },
+          "401": {
+            "description": "Требуется авторизация"
+          },
+          "403": {
+            "description": "Доступ запрещён"
+          },
+          "503": {
+            "description": "Сервис временно недоступен"
+          }
+        }
+      }
+    },
+    "/me/telegram-link": {
+      "post": {
+        "summary": "Получить одноразовый код привязки Telegram",
+        "responses": {
+          "200": {
+            "description": "Успешно",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "expires_in": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "expires_in"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Невалидный запрос"
+          },
+          "401": {
+            "description": "Требуется авторизация"
+          },
+          "403": {
+            "description": "Доступ запрещён"
+          },
+          "503": {
+            "description": "Сервис временно недоступен"
+          }
+        }
+      }
+    },
+    "/users/{id}/telegram-link": {
+      "post": {
+        "summary": "Создать код привязки Telegram для пользователя (admin)",
+        "responses": {
+          "200": {
+            "description": "Успешно",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "expires_in": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "expires_in"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Невалидный запрос"
+          },
+          "401": {
+            "description": "Требуется авторизация"
+          },
+          "403": {
+            "description": "Доступ запрещён"
+          },
+          "503": {
+            "description": "Сервис временно недоступен"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/documents/consent": {
+      "get": {
+        "summary": "Текст документа",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Документ",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/privacy-policy": {
+      "get": {
+        "summary": "Текст документа",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Документ",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          },
+          "checks": {
+            "type": "object"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "LoginResponse": {
+        "type": "object",
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/User"
+          },
+          "consent_required": {
+            "type": "boolean"
+          }
+        }
+      },
+      "MeResponse": {
+        "type": "object",
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/User"
+          },
+          "consent_required": {
+            "type": "boolean"
+          }
+        }
+      },
+      "PasswordChangeRequest": {
+        "type": "object",
+        "required": [
+          "old_password",
+          "new_password"
+        ],
+        "properties": {
+          "old_password": {
+            "type": "string"
+          },
+          "new_password": {
+            "type": "string"
+          }
+        }
+      },
+      "RegistrationPayload": {
+        "type": "object",
+        "required": [
+          "first_name",
+          "last_name",
+          "email"
+        ],
+        "properties": {
+          "first_name": {
+            "type": "string"
+          },
+          "last_name": {
+            "type": "string"
+          },
+          "middle_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "telegram": {
+            "type": "string"
+          },
+          "department": {
+            "type": "string"
+          },
+          "position": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "ConsentInfo": {
+        "type": "object",
+        "properties": {
+          "document_version": {
+            "type": "string"
+          }
+        }
+      },
+      "ConsentRequest": {
+        "type": "object",
+        "required": [
+          "document_version"
+        ],
+        "properties": {
+          "document_version": {
+            "type": "string"
+          }
+        }
+      },
+      "User": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "first_name": {
+            "type": "string"
+          },
+          "last_name": {
+            "type": "string"
+          },
+          "middle_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "telegram": {
+            "type": "string"
+          },
+          "department": {
+            "type": "string"
+          },
+          "position": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "admin"
+            ]
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "blocked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CreateUserRequest": {
+        "type": "object",
+        "required": [
+          "first_name",
+          "last_name",
+          "email",
+          "password"
+        ],
+        "properties": {
+          "first_name": {
+            "type": "string"
+          },
+          "last_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "telegram": {
+            "type": "string"
+          },
+          "department": {
+            "type": "string"
+          },
+          "position": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "admin"
+            ]
+          },
+          "password": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "UpdateUserRequest": {
+        "type": "object",
+        "properties": {
+          "first_name": {
+            "type": "string"
+          },
+          "last_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "telegram": {
+            "type": "string"
+          },
+          "department": {
+            "type": "string"
+          },
+          "position": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Statistic": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "user_email": {
+            "type": "string"
+          },
+          "country": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "browser": {
+            "type": "string"
+          },
+          "os": {
+            "type": "string"
+          },
+          "device": {
+            "type": "string"
+          },
+          "screen_resolution": {
+            "type": "string"
+          },
+          "login_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "duration_seconds": {
+            "type": "integer"
+          },
+          "auth_error": {
+            "type": "string"
+          }
+        }
+      },
+      "AuditLog": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "action": {
+            "type": "string"
+          },
+          "entity_type": {
+            "type": "string"
+          },
+          "entity_id": {
+            "type": "string"
+          },
+          "ip": {
+            "type": "string"
+          },
+          "user_agent": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RegistrationRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "first_name": {
+            "type": "string"
+          },
+          "last_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "telegram": {
+            "type": "string"
+          },
+          "department": {
+            "type": "string"
+          },
+          "position": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Dashboard": {
+        "type": "object",
+        "properties": {
+          "users_total": {
+            "type": "integer"
+          },
+          "users_blocked": {
+            "type": "integer"
+          },
+          "registrations_pending": {
+            "type": "integer"
+          },
+          "logins_today": {
+            "type": "integer"
+          },
+          "logins_total": {
+            "type": "integer"
+          }
+        }
+      },
+      "Credentials": {
+        "type": "object",
+        "properties": {
+          "reset_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "expires_in": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "reset_url",
+          "expires_in"
+        ]
+      },
+      "Session": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "current": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "expires_at",
+          "current"
+        ]
+      }
+    }
+  }
+}
