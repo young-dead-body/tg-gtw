@@ -1,246 +1,137 @@
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:17-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-tg}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run ./scripts/install.sh}
       POSTGRES_DB: ${POSTGRES_DB:-telegram_gateway}
-    ports:
-      - "127.0.0.1:5432:5432"
-    restart: unless-stopped
-    volumes:
-      - pgdata:/var/lib/postgresql/data
+    volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tg} -d ${POSTGRES_DB:-telegram_gateway}"]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 20
+    restart: unless-stopped
+    logging: *logging
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
-    ports:
-      - "127.0.0.1:6379:6379"
-    restart: unless-stopped
-    volumes:
-      - redisdata:/data
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "48mb", "--maxmemory-policy", "noeviction"]
+    volumes: [redisdata:/data]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 20
+    restart: unless-stopped
+    logging: *logging
 
   migrate:
-    image: telegram-gateway-prod-migrate:latest
     build: ./api
     environment:
-      POSTGRES_DSN: postgres://${POSTGRES_USER:-tg}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-telegram_gateway}
+      POSTGRES_DSN: postgres://${POSTGRES_USER:-tg}:${POSTGRES_PASSWORD:?Run ./scripts/install.sh}@postgres:5432/${POSTGRES_DB:-telegram_gateway}
       RUN_MIGRATIONS: "1"
-      # Изоляция контуров: migrate отказывается работать с чужой БД.
-      MIGRATE_EXPECT_DB: ${MIGRATE_EXPECT_DB:-telegram_gateway}
-      # Seed the telegram.bot feature toggle from the host when the key is absent.
-      TG_BOT_ENABLED: ${TG_BOT_ENABLED:-true}
+      MIGRATE_EXPECT_DB: ${POSTGRES_DB:-telegram_gateway}
+      TG_BOT_ENABLED: ${TG_BOT_ENABLED:-false}
     depends_on:
-      postgres:
-        condition: service_healthy
+      postgres: {condition: service_healthy}
     restart: "no"
+    logging: *logging
 
   api:
-    image: telegram-gateway-prod-api:latest
     build: ./api
     environment:
       PORT: 8080
-      POSTGRES_DSN: postgres://${POSTGRES_USER:-tg}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-telegram_gateway}
+      POSTGRES_DSN: postgres://${POSTGRES_USER:-tg}:${POSTGRES_PASSWORD:?Run ./scripts/install.sh}@postgres:5432/${POSTGRES_DB:-telegram_gateway}
       REDIS_ADDR: redis:6379
-      # Shared secret the bot presents as Authorization: Bearer (S11).
-      BOT_TOKEN: ${BOT_API_TOKEN:?Set BOT_API_TOKEN in .env}
-      GATEWAY_URL: ${GATEWAY_URL:-https://localhost}
-      METRICS_ADDR: :9091
-      # Host value of the tg-bot feature toggle (fallback when settings absent).
-      TG_BOT_ENABLED: ${TG_BOT_ENABLED:-true}
+      BOT_TOKEN: ${BOT_API_TOKEN:?Run ./scripts/install.sh}
+      GATEWAY_URL: https://${DOMAIN:?Set DOMAIN in .env}
+      TG_BOT_ENABLED: ${TG_BOT_ENABLED:-false}
+      TELEGRAM_PROXY_ADDR: telegram-proxy:8080
       BACKUP_DIR: /backups
       BACKUP_KEEP: ${BACKUP_KEEP:-7}
-      RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:-}
-      RESTIC_PASSWORD: ${RESTIC_PASSWORD:-}
-      AWS_ACCESS_KEY_ID: ${BACKUP_AWS_ACCESS_KEY_ID:-}
-      AWS_SECRET_ACCESS_KEY: ${BACKUP_AWS_SECRET_ACCESS_KEY:-}
       BACKUP_CRON_INTERVAL: ${BACKUP_CRON_INTERVAL:-24h}
       CLEANUP_CRON_INTERVAL: ${CLEANUP_CRON_INTERVAL:-24h}
       CLEANUP_REQUEST_AGE: ${CLEANUP_REQUEST_AGE:-720h}
       ARCHIVE_CRON_INTERVAL: ${ARCHIVE_CRON_INTERVAL:-24h}
       ARCHIVE_LOG_AGE: ${ARCHIVE_LOG_AGE:-2160h}
-      TELEGRAM_PROXY_ADDR: telegram-proxy:8080
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      LOG_FILE: /logs/app.log
-      # The first administrator gets random credentials printed by api at startup.
-    restart: unless-stopped
-    volumes:
-      - backups:/backups
-      - logs:/logs
-    ports:
-      - "127.0.0.1:8080:8080"
+    volumes: [backups:/backups]
+    ports: ["127.0.0.1:18090:8080"]
     depends_on:
-      migrate:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+    logging: *logging
 
   bot:
-    image: telegram-gateway-prod-bot:latest
+    profiles: [bot]
     build: ./bot
-    # Scale to 0 (BOT_REPLICAS=0) when the tg-bot is disabled on the host via
-    # TG_BOT_ENABLED=false. The container itself also exits gracefully when the
-    # toggle is off and the token is empty.
-    deploy:
-      replicas: ${BOT_REPLICAS:-1}
     environment:
       TELEGRAM_BOT_TOKEN: ${BOT_TOKEN:-}
-      API_TOKEN: ${BOT_API_TOKEN:?Set BOT_API_TOKEN in .env}
+      API_TOKEN: ${BOT_API_TOKEN:?Run ./scripts/install.sh}
       API_URL: http://api:8080
       REDIS_ADDR: redis:6379
       EVENTS_CHANNEL: gateway:events
-      TG_BOT_ENABLED: ${TG_BOT_ENABLED:-true}
-    restart: unless-stopped
+      TG_BOT_ENABLED: ${TG_BOT_ENABLED:-false}
+      HTTPS_PROXY: ${BOT_HTTPS_PROXY:-}
+      NO_PROXY: api,localhost,127.0.0.1
     depends_on:
-      api:
-        condition: service_started
-      redis:
-        condition: service_healthy
+      api: {condition: service_started}
+    restart: unless-stopped
+    logging: *logging
 
   web:
-    image: telegram-gateway-prod-web:latest
     build: ./web
+    depends_on: [api]
     restart: unless-stopped
-    ports:
-      - "3002:80"
-    depends_on:
-      - api
+    logging: *logging
 
   telegram-proxy:
-    image: telegram-gateway-prod-telegram-proxy:latest
     build:
       context: ./api
       dockerfile: Dockerfile.proxy
     environment:
       PROXY_ADDR: :8080
-      POSTGRES_DSN: postgres://${POSTGRES_USER:-tg}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-telegram_gateway}
+      POSTGRES_DSN: postgres://${POSTGRES_USER:-tg}:${POSTGRES_PASSWORD:?Run ./scripts/install.sh}@postgres:5432/${POSTGRES_DB:-telegram_gateway}
       REDIS_ADDR: redis:6379
-      METRICS_ADDR: :9092
-      # SOCKS5-шлюз к Telegram (S10): весь трафик /tg/* и health-check
-      # бэкендов идут через него, если задан.
       SOCKS5_ADDR: ${SOCKS5_ADDR:-}
-      # DC WebSockets use the authenticated same-origin /tg/_gw/dc/ route.
-      # TURN-релей для медиа звонков Telegram Web (api/internal/turnrelay):
-      # браузер -> turns:<TURN_URLS> (VPS nginx, SNI, TLS) -> frp -> :3478
-      # (plain TURN/TCP) -> UDP через SOCKS5_ADDR (UDP ASSOCIATE) к Telegram.
-      # Пустой TURN_ADDR — релей выключен, звонки идут только через TURN
-      # Telegram (из заблокированных сетей висят на «Соединение…»).
       TURN_ADDR: ${TURN_ADDR:-}
       TURN_SECRET: ${TURN_SECRET:-}
       TURN_URLS: ${TURN_URLS:-}
-      TURN_REALM: ${TURN_REALM:-telegram-gateway}
-      TURN_STUN_SERVER: ${TURN_STUN_SERVER:-stun.cloudflare.com:3478}
       TURN_PUBLIC_IP: ${TURN_PUBLIC_IP:-}
-      TURN_CREDENTIAL_TTL: ${TURN_CREDENTIAL_TTL:-12h}
-      TURN_RELAY_ONLY: ${TURN_RELAY_ONLY:-false}
-    restart: unless-stopped
-    ports:
-      - "8081:8080"
-      # TURN/TCP только на loopback: снаружи доступен лишь через frpc.
-      - "127.0.0.1:3478:3478"
     depends_on:
-      migrate:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+    logging: *logging
 
   nginx:
     image: nginx:1.27-alpine
-    restart: unless-stopped
-    ports:
-      - "443:443"
-      - "80:80"
-      # Plaintext DC-bridge listeners for remote access via frpc (VPS TLS).
     environment:
-      # Upstreams and TLS paths are injected into the config template at
-      # startup (T9.4 — config via environment variables). NGINX_ENVSUBST_FILTER
-      # restricts substitution to these placeholders so $host, $request_uri,
-      # etc. are preserved.
-      NGINX_ENVSUBST_FILTER: API_UPSTREAM|WEB_UPSTREAM|TG_UPSTREAM|TLS_CERT|TLS_KEY|DC_BRIDGE_WSS_[1-5]
-      API_UPSTREAM: ${API_UPSTREAM:-api:8080}
-      WEB_UPSTREAM: ${WEB_UPSTREAM:-web:80}
-      TG_UPSTREAM: ${TG_UPSTREAM:-telegram-proxy:8080}
-      TLS_CERT: ${TLS_CERT:-/etc/nginx/certs/server.crt}
-      TLS_KEY: ${TLS_KEY:-/etc/nginx/certs/server.key}
-      # CSP connect-src: браузерные MTProto WebSockets к DC-мосту
-      # (переписанные dc_options) — другой origin, чем порт веб-входа.
-      # Значения берутся из .env (DC_BRIDGE_WSS_1..5). В domain-режиме
-      # (DC_REWRITE_DOMAIN) это dc<N>.<домен> без порта; дефолт — legacy LAN
-      # (DC_REWRITE_IP:20001..20005).
-      DC_BRIDGE_WSS_1: ${DC_BRIDGE_WSS_1:-${DC_REWRITE_IP:-127.0.0.1}:20001}
-      DC_BRIDGE_WSS_2: ${DC_BRIDGE_WSS_2:-${DC_REWRITE_IP:-127.0.0.1}:20002}
-      DC_BRIDGE_WSS_3: ${DC_BRIDGE_WSS_3:-${DC_REWRITE_IP:-127.0.0.1}:20003}
-      DC_BRIDGE_WSS_4: ${DC_BRIDGE_WSS_4:-${DC_REWRITE_IP:-127.0.0.1}:20004}
-      DC_BRIDGE_WSS_5: ${DC_BRIDGE_WSS_5:-${DC_REWRITE_IP:-127.0.0.1}:20005}
+      NGINX_ENVSUBST_FILTER: API_UPSTREAM|WEB_UPSTREAM|TG_UPSTREAM|TLS_CERT|TLS_KEY
+      API_UPSTREAM: api:8080
+      WEB_UPSTREAM: web:80
+      TG_UPSTREAM: telegram-proxy:8080
+      TLS_CERT: /etc/nginx/certs/server.crt
+      TLS_KEY: /etc/nginx/certs/server.key
+    ports: ["80:80", "443:443"]
     volumes:
       - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./infra/nginx/templates:/etc/nginx/templates:ro
       - ./infra/nginx/certs:/etc/nginx/certs:ro
-    depends_on:
-      - api
-      - web
-      - telegram-proxy
-
-  prometheus:
-    image: prom/prometheus:v2.54.0
+      - ./infra/certbot:/var/www/certbot:ro
+    depends_on: [api, web, telegram-proxy]
     restart: unless-stopped
-    volumes:
-      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./infra/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
-      - promdata:/prometheus
-    ports:
-      - "9090:9090"
-
-  grafana:
-    image: grafana/grafana:11.1.0
-    restart: unless-stopped
-    environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in .env}
-    volumes:
-      - grafanadata:/var/lib/grafana
-      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
-    ports:
-      - "3001:3000"
-    depends_on:
-      - prometheus
-      - loki
-
-  loki:
-    image: grafana/loki:3.1.0
-    restart: unless-stopped
-    command: -config.file=/etc/loki/local-config.yaml
-    volumes:
-      - ./infra/loki/loki.yaml:/etc/loki/loki.yaml:ro
-    ports:
-      - "3100:3100"
-
-  promtail:
-    image: grafana/promtail:3.1.0
-    restart: unless-stopped
-    command:
-      - -config.file=/etc/promtail/config.yml
-      - -positions.file=/tmp/positions.yaml
-    volumes:
-      - ./infra/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
-      - logs:/logs:ro
-    depends_on:
-      - loki
-      - api
+    logging: *logging
 
 volumes:
   pgdata:
   redisdata:
-  promdata:
-  grafanadata:
   backups:
-  logs:

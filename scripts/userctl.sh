@@ -47,9 +47,8 @@ env_get() {
 POSTGRES_USER="${POSTGRES_USER:-$(env_get POSTGRES_USER tg)}"
 POSTGRES_DB="${POSTGRES_DB:-$(env_get POSTGRES_DB telegram_gateway)}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(env_get POSTGRES_PASSWORD '')}"
-PG_CONTAINER="${PG_CONTAINER:-$(docker ps --format '{{.Names}}' | grep -m1 'telegram-gateway.*postgres' || true)}"
-REDIS_CONTAINER="${REDIS_CONTAINER:-$(docker ps --format '{{.Names}}' | grep -m1 'telegram-gateway.*redis' || true)}"
-PG_CONTAINER="${PG_CONTAINER:-telegram-gateway-postgres-1}"
+PG_CONTAINER="${PG_CONTAINER:-$(docker compose -f "$ROOT/docker-compose.yml" --project-directory "$ROOT" ps -q postgres 2>/dev/null || true)}"
+REDIS_CONTAINER="${REDIS_CONTAINER:-$(docker compose -f "$ROOT/docker-compose.yml" --project-directory "$ROOT" ps -q redis 2>/dev/null || true)}"
 
 email=""
 role=""
@@ -104,7 +103,7 @@ if ! docker ps >/dev/null 2>&1; then
   echo "docker недоступен" >&2
   exit 1
 fi
-[[ -n "$(docker ps --format '{{.Names}}' | grep -x "$PG_CONTAINER" || true)" ]] || {
+[[ -n "$PG_CONTAINER" && "$(docker inspect -f '{{.State.Running}}' "$PG_CONTAINER" 2>/dev/null)" == true ]] || {
   echo "контейнер postgres не найден: $PG_CONTAINER (задайте PG_CONTAINER)" >&2
   exit 1
 }
@@ -125,7 +124,7 @@ fi
 
 redis_del() {
   [[ "$clear_lock" == false ]] && return 0
-  if [[ -n "$REDIS_CONTAINER" ]] && docker ps --format '{{.Names}}' | grep -qx "$REDIS_CONTAINER"; then
+  if [[ -n "$REDIS_CONTAINER" && "$(docker inspect -f '{{.State.Running}}' "$REDIS_CONTAINER" 2>/dev/null)" == true ]]; then
     docker exec "$REDIS_CONTAINER" redis-cli DEL "email:$email" >/dev/null 2>&1 || true
     echo "* lockout в Redis сброшен (email:$email)"
   fi

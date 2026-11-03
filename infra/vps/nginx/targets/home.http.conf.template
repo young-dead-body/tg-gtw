@@ -1,9 +1,0 @@
-# Трафик шлюза -> домашний стек через frp-туннель (switch-ingress.sh home).
-# Адреса — порты frps на VPS (INGRESS_HOME_* в .env.vps, docs/deploy/HOME.md).
-upstream webtgk_up { server ${INGRESS_HOME_WEB}; }
-
-upstream tgk_dc1 { server ${INGRESS_HOME_DC1}; }
-upstream tgk_dc2 { server ${INGRESS_HOME_DC2}; }
-upstream tgk_dc3 { server ${INGRESS_HOME_DC3}; }
-upstream tgk_dc4 { server ${INGRESS_HOME_DC4}; }
-upstream tgk_dc5 { server ${INGRESS_HOME_DC5}; }

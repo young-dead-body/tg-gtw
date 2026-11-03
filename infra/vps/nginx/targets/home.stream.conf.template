@@ -1,2 +1,0 @@
-# TURN шлюза -> telegram-proxy домашнего стека через frp-туннель.
-upstream tgk_turn { server ${INGRESS_HOME_TURN}; }
